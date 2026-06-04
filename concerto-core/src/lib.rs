@@ -12,10 +12,15 @@
 
 pub mod error;
 pub mod model;
+pub mod model_manager;
 pub mod model_util;
+pub mod rootmodel;
 
 pub use error::{ConcertoError, Result};
-pub use model::{ClassDeclaration, ClassKind, Declaration, Property, ScalarDeclaration};
+pub use model::{
+    ClassDeclaration, ClassKind, Declaration, Import, ModelFile, Property, ScalarDeclaration,
+};
+pub use model_manager::ModelManager;
 
 #[cfg(test)]
 mod tests {
