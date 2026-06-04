@@ -5,14 +5,17 @@
 //! and, in later work, the logic for validating data against them.
 //!
 //! It is built on top of the generated [`concerto_metamodel`] types, which it
-//! wraps using the new-type pattern rather than re-deriving the schema (see
-//! `AGENTS.md`).
+//! wraps using sum types and the new-type pattern rather than re-deriving the
+//! schema (see `AGENTS.md`).
 //!
 //! [Concerto]: https://concerto.accordproject.org/docs/category/specification
 
 pub mod error;
+pub mod model;
+pub mod model_util;
 
 pub use error::{ConcertoError, Result};
+pub use model::{ClassDeclaration, ClassKind, Declaration, Property, ScalarDeclaration};
 
 #[cfg(test)]
 mod tests {
