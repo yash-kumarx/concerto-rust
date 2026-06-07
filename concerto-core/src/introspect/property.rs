@@ -161,22 +161,21 @@ impl TryFrom<&serde_json::Value> for Property {
             file_name: None,
             location: None,
         };
-        let parse = |v: &serde_json::Value| v.clone();
 
         Ok(match kind {
-            "BooleanProperty" => Self::Boolean(serde_json::from_value(parse(value)).map_err(bad)?),
-            "StringProperty" => Self::String(serde_json::from_value(parse(value)).map_err(bad)?),
-            "IntegerProperty" => Self::Integer(serde_json::from_value(parse(value)).map_err(bad)?),
-            "LongProperty" => Self::Long(serde_json::from_value(parse(value)).map_err(bad)?),
-            "DoubleProperty" => Self::Double(serde_json::from_value(parse(value)).map_err(bad)?),
+            "BooleanProperty" => Self::Boolean(serde_json::from_value(value.clone()).map_err(bad)?),
+            "StringProperty" => Self::String(serde_json::from_value(value.clone()).map_err(bad)?),
+            "IntegerProperty" => Self::Integer(serde_json::from_value(value.clone()).map_err(bad)?),
+            "LongProperty" => Self::Long(serde_json::from_value(value.clone()).map_err(bad)?),
+            "DoubleProperty" => Self::Double(serde_json::from_value(value.clone()).map_err(bad)?),
             "DateTimeProperty" => {
-                Self::DateTime(serde_json::from_value(parse(value)).map_err(bad)?)
+                Self::DateTime(serde_json::from_value(value.clone()).map_err(bad)?)
             }
-            "ObjectProperty" => Self::Object(serde_json::from_value(parse(value)).map_err(bad)?),
+            "ObjectProperty" => Self::Object(serde_json::from_value(value.clone()).map_err(bad)?),
             "RelationshipProperty" => {
-                Self::Relationship(serde_json::from_value(parse(value)).map_err(bad)?)
+                Self::Relationship(serde_json::from_value(value.clone()).map_err(bad)?)
             }
-            "EnumProperty" => Self::Enum(serde_json::from_value(parse(value)).map_err(bad)?),
+            "EnumProperty" => Self::Enum(serde_json::from_value(value.clone()).map_err(bad)?),
             other => {
                 return Err(ConcertoError::IllegalModel {
                     message: format!("unknown property type: {other}"),
