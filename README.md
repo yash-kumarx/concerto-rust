@@ -8,11 +8,12 @@ deployed across multiple platforms (native, WASM, and FFI bindings).
 
 This repository is a Cargo workspace:
 
-- [`concerto-metamodel`](./concerto-metamodel/) — generated Rust types for the
+- [`concerto-metamodel`](./concerto-metamodel/): generated Rust types for the
   Concerto metamodel (produced from the upstream `concerto-metamodel` package).
-- [`concerto-core`](./concerto-core/) — the hand-written core: the in-memory
-  representation of Concerto models and the validation logic. Core types wrap
-  the generated metamodel types using the new-type pattern.
+- [`concerto-core`](./concerto-core/): the hand-written core. Holds the
+  in-memory representation of Concerto models, with the validation logic to
+  follow. Core types wrap the generated metamodel types using the new-type
+  pattern.
 
 ## Building
 
