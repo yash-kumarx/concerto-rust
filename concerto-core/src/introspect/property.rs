@@ -159,6 +159,17 @@ impl TryFrom<&serde_json::Value> for Property {
                 location: None,
             });
         }
+        // The `$` prefix is reserved for system fields ($class, $identifier,
+        // $timestamp), so a declared field may not use it.
+        if let Some(name) = value.get("name").and_then(|n| n.as_str())
+            && name.starts_with('$')
+        {
+            return Err(ConcertoError::IllegalModel {
+                message: format!("Invalid field name '{name}'"),
+                file_name: None,
+                location: None,
+            });
+        }
         let kind = short_name(class);
 
         // Parse into whatever struct the `$class` says this is. If serde

@@ -37,6 +37,15 @@ pub enum ConcertoError {
         /// The source location, if known.
         location: Option<String>,
     },
+
+    /// A loaded model is structurally sound but fails semantic validation:
+    /// an unresolved super type, an identifier of the wrong type, a duplicated
+    /// field across an inheritance chain, and the like.
+    #[error("validation failed: {message}")]
+    ValidationFailed {
+        /// A description of what did not validate.
+        message: String,
+    },
 }
 
 #[cfg(test)]
