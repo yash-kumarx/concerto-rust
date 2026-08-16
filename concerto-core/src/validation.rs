@@ -20,7 +20,9 @@ use std::collections::HashSet;
 use concerto_metamodel::concerto_metamodel_1_0_0 as mm;
 
 use crate::error::{ConcertoError, Result};
-use crate::introspect::declaration::{ClassDeclaration, Declaration};
+use crate::introspect::declaration::{ClassDeclaration, Declaration, MapDeclaration};
+use crate::introspect::import::Import;
+use crate::introspect::model_file::ModelFile;
 use crate::introspect::property::Property;
 use crate::model_manager::ModelManager;
 use crate::model_util::{is_primitive_type, qualify};
@@ -38,6 +40,7 @@ impl ModelManager {
         model_files.sort_by_key(|model_file| model_file.namespace());
 
         for model_file in model_files {
+            check_import_clashes(model_file)?;
             for declaration in model_file.declarations() {
                 validate_declaration(self, model_file.namespace(), declaration)?;
             }
@@ -46,9 +49,30 @@ impl ModelManager {
     }
 }
 
-/// Validates one declaration. Only class-like declarations carry
-/// cross-declaration references; enum, scalar and map declarations are already
-/// fully checked while loading.
+/// An imported name may be introduced only once, whether the repeat comes from
+/// the same namespace or a different one, and a declaration may not take a name
+/// the file imports. The latter also rules out importing from the file's own
+/// namespace.
+fn check_import_clashes(model_file: &ModelFile) -> Result<()> {
+    let mut imported = HashSet::new();
+    for name in model_file.imports().iter().flat_map(Import::local_names) {
+        if !imported.insert(name) {
+            return Err(failed(format!("Type {name} is imported more than once")));
+        }
+    }
+    for declaration in model_file.declarations() {
+        if imported.contains(declaration.name()) {
+            return Err(failed(format!(
+                "Type {} clashes with an imported type with the same name",
+                declaration.name()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validates one declaration. Class-like and map declarations refer to other
+/// types; enum and scalar declarations are already fully checked while loading.
 fn validate_declaration(
     manager: &ModelManager,
     namespace: &str,
@@ -56,8 +80,34 @@ fn validate_declaration(
 ) -> Result<()> {
     match declaration {
         Declaration::Class(class) => validate_class(manager, namespace, class),
-        _ => Ok(()),
+        Declaration::Map(map) => check_map_types(manager, namespace, map),
+        Declaration::Enum(_) | Declaration::Scalar(_) => Ok(()),
     }
+}
+
+/// A map key or value that names a type rather than a primitive must resolve to
+/// a declared one.
+fn check_map_types(manager: &ModelManager, namespace: &str, map: &MapDeclaration) -> Result<()> {
+    for (part, type_identifier) in [("key", map.key_type()), ("value", map.value_type())] {
+        let Some(type_identifier) = type_identifier else {
+            continue;
+        };
+        let resolved = resolve(
+            manager,
+            namespace,
+            &type_identifier.name,
+            type_identifier.namespace.as_deref(),
+        )
+        .and_then(|fqn| manager.get_declaration(&fqn).ok());
+        if resolved.is_none() {
+            return Err(failed(format!(
+                "Undeclared type {} referenced by the {part} of map {}",
+                type_identifier.name,
+                map.name()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_class(manager: &ModelManager, namespace: &str, class: &ClassDeclaration) -> Result<()> {
@@ -483,6 +533,187 @@ mod tests {
             "properties": []
         }))]));
         assert!(err.unwrap_err().to_string().contains("Duplicate decorator"));
+    }
+
+    /// Loads `org.example@1.0.0` with the given imports and declarations.
+    fn validate_with_imports(
+        imports: serde_json::Value,
+        declarations: serde_json::Value,
+    ) -> crate::error::Result<()> {
+        let mut manager = ModelManager::new().unwrap();
+        manager
+            .add_model(
+                &serde_json::json!({
+                    "$class": "concerto.metamodel@1.0.0.Model",
+                    "namespace": "org.common@1.0.0",
+                    "declarations": [concept(serde_json::json!({ "name": "Address" }))]
+                }),
+                None,
+            )
+            .unwrap();
+        manager
+            .add_model(
+                &serde_json::json!({
+                    "$class": "concerto.metamodel@1.0.0.Model",
+                    "namespace": "org.example@1.0.0",
+                    "imports": imports,
+                    "declarations": declarations
+                }),
+                None,
+            )
+            .unwrap();
+        manager.validate_models()
+    }
+
+    #[test]
+    fn declaration_clashing_with_an_imported_name_is_rejected() {
+        let err = validate_with_imports(
+            serde_json::json!([
+                { "$class": "concerto.metamodel@1.0.0.ImportType",
+                  "namespace": "org.common@1.0.0", "name": "Address" }
+            ]),
+            serde_json::json!([concept(serde_json::json!({ "name": "Address" }))]),
+        );
+        assert!(err.unwrap_err().to_string().contains("clashes"));
+    }
+
+    #[test]
+    fn declaration_beside_a_distinct_import_is_accepted() {
+        let err = validate_with_imports(
+            serde_json::json!([
+                { "$class": "concerto.metamodel@1.0.0.ImportType",
+                  "namespace": "org.common@1.0.0", "name": "Address" }
+            ]),
+            serde_json::json!([concept(serde_json::json!({ "name": "Person" }))]),
+        );
+        assert!(err.is_ok());
+    }
+
+    #[test]
+    fn importing_from_the_files_own_namespace_is_rejected() {
+        // A self-import makes the local declaration clash with itself.
+        let mut manager = ModelManager::new().unwrap();
+        manager
+            .add_model(
+                &serde_json::json!({
+                    "$class": "concerto.metamodel@1.0.0.Model",
+                    "namespace": "org.example@1.0.0",
+                    "imports": [
+                        { "$class": "concerto.metamodel@1.0.0.ImportType",
+                          "namespace": "org.example@1.0.0", "name": "LocalType" }
+                    ],
+                    "declarations": [concept(serde_json::json!({ "name": "LocalType" }))]
+                }),
+                None,
+            )
+            .unwrap();
+        assert!(
+            manager
+                .validate_models()
+                .unwrap_err()
+                .to_string()
+                .contains("clashes")
+        );
+    }
+
+    #[test]
+    fn an_aliased_import_clashes_under_its_alias() {
+        // `import org.common.{Address as Location}` occupies Location, not Address.
+        let imports = serde_json::json!([
+            { "$class": "concerto.metamodel@1.0.0.ImportTypes",
+              "namespace": "org.common@1.0.0", "types": ["Address"],
+              "aliasedTypes": [
+                { "$class": "concerto.metamodel@1.0.0.AliasedType",
+                  "name": "Address", "aliasedName": "Location" }
+              ] }
+        ]);
+        let clash = validate_with_imports(
+            imports.clone(),
+            serde_json::json!([concept(serde_json::json!({ "name": "Location" }))]),
+        );
+        assert!(clash.unwrap_err().to_string().contains("clashes"));
+
+        let free = validate_with_imports(
+            imports,
+            serde_json::json!([concept(serde_json::json!({ "name": "Address" }))]),
+        );
+        assert!(free.is_ok());
+    }
+
+    #[test]
+    fn the_same_name_imported_twice_is_rejected() {
+        // Once from the same namespace, once from a different one.
+        for second in [
+            serde_json::json!({ "$class": "concerto.metamodel@1.0.0.ImportType",
+              "namespace": "org.common@1.0.0", "name": "Address" }),
+            serde_json::json!({ "$class": "concerto.metamodel@1.0.0.ImportType",
+              "namespace": "org.other@1.0.0", "name": "Address" }),
+        ] {
+            let err = validate_with_imports(
+                serde_json::json!([
+                    { "$class": "concerto.metamodel@1.0.0.ImportType",
+                      "namespace": "org.common@1.0.0", "name": "Address" },
+                    second
+                ]),
+                serde_json::json!([concept(serde_json::json!({ "name": "Person" }))]),
+            );
+            assert!(
+                err.unwrap_err()
+                    .to_string()
+                    .contains("imported more than once")
+            );
+        }
+    }
+
+    #[test]
+    fn distinct_names_from_one_namespace_are_accepted() {
+        let err = validate_with_imports(
+            serde_json::json!([
+                { "$class": "concerto.metamodel@1.0.0.ImportType",
+                  "namespace": "org.common@1.0.0", "name": "Address" },
+                { "$class": "concerto.metamodel@1.0.0.ImportType",
+                  "namespace": "org.common@1.0.0", "name": "Other" }
+            ]),
+            serde_json::json!([concept(serde_json::json!({ "name": "Person" }))]),
+        );
+        assert!(err.is_ok());
+    }
+
+    /// A map whose value points at `value_type`.
+    fn map_of(value_type: &str) -> serde_json::Value {
+        serde_json::json!({
+            "$class": "concerto.metamodel@1.0.0.MapDeclaration",
+            "name": "MyMap",
+            "key": { "$class": "concerto.metamodel@1.0.0.StringMapKeyType" },
+            "value": { "$class": "concerto.metamodel@1.0.0.ObjectMapValueType",
+                       "type": { "$class": "concerto.metamodel@1.0.0.TypeIdentifier", "name": value_type } }
+        })
+    }
+
+    #[test]
+    fn map_value_of_undeclared_type_is_rejected() {
+        let err = validate(serde_json::json!([map_of("UnknownType")]));
+        assert!(err.unwrap_err().to_string().contains("Undeclared type"));
+    }
+
+    #[test]
+    fn map_value_of_declared_type_is_accepted() {
+        let err = validate(serde_json::json!([
+            concept(serde_json::json!({ "name": "ValueType" })),
+            map_of("ValueType")
+        ]));
+        assert!(err.is_ok());
+    }
+
+    #[test]
+    fn map_of_primitives_is_accepted() {
+        let err = validate(serde_json::json!([{
+            "$class": "concerto.metamodel@1.0.0.MapDeclaration",
+            "name": "Simple",
+            "key": { "$class": "concerto.metamodel@1.0.0.StringMapKeyType" },
+            "value": { "$class": "concerto.metamodel@1.0.0.StringMapValueType" }
+        }]));
+        assert!(err.is_ok());
     }
 
     #[test]
