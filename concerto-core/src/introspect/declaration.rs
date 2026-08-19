@@ -211,6 +211,18 @@ impl ScalarDeclaration {
         }
     }
 
+    /// The decorators attached to this scalar.
+    pub fn decorators(&self) -> &[mm::Decorator] {
+        match self {
+            Self::Boolean(s) => s.decorators.as_deref().unwrap_or(&[]),
+            Self::Integer(s) => s.decorators.as_deref().unwrap_or(&[]),
+            Self::Long(s) => s.decorators.as_deref().unwrap_or(&[]),
+            Self::Double(s) => s.decorators.as_deref().unwrap_or(&[]),
+            Self::String(s) => s.decorators.as_deref().unwrap_or(&[]),
+            Self::DateTime(s) => s.decorators.as_deref().unwrap_or(&[]),
+        }
+    }
+
     /// The metamodel `$class` short name for this scalar, e.g. `StringScalar`.
     pub fn declaration_kind(&self) -> &'static str {
         match self {
@@ -305,6 +317,9 @@ pub enum Declaration {
 #[derive(Debug, Clone)]
 pub struct MapDeclaration {
     name: String,
+    decorators: Vec<mm::Decorator>,
+    key_decorators: Vec<mm::Decorator>,
+    value_decorators: Vec<mm::Decorator>,
     key_kind: String,
     key_type: Option<mm::TypeIdentifier>,
     value_kind: String,
@@ -315,6 +330,21 @@ impl MapDeclaration {
     /// The map's short name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The decorators attached to the map itself.
+    pub fn decorators(&self) -> &[mm::Decorator] {
+        &self.decorators
+    }
+
+    /// The decorators attached to the key.
+    pub fn key_decorators(&self) -> &[mm::Decorator] {
+        &self.key_decorators
+    }
+
+    /// The decorators attached to the value.
+    pub fn value_decorators(&self) -> &[mm::Decorator] {
+        &self.value_decorators
     }
 
     /// The metamodel `$class` short name of the key node, such as
@@ -348,12 +378,22 @@ impl MapDeclaration {
             })?;
         Ok(Self {
             name: declaration.name,
+            decorators: declaration.decorators.unwrap_or_default(),
+            key_decorators: node_decorators(value.get("key")),
+            value_decorators: node_decorators(value.get("value")),
             key_kind: node_kind(value.get("key")),
             key_type: type_reference(value.get("key")),
             value_kind: node_kind(value.get("value")),
             value_type: type_reference(value.get("value")),
         })
     }
+}
+
+/// The decorators on a map key or value node.
+fn node_decorators(node: Option<&serde_json::Value>) -> Vec<mm::Decorator> {
+    node.and_then(|n| n.get("decorators"))
+        .and_then(|d| serde_json::from_value(d.clone()).ok())
+        .unwrap_or_default()
 }
 
 /// The `$class` short name of a map key or value node.
@@ -386,6 +426,16 @@ impl Declaration {
             Self::Enum(_) => "EnumDeclaration",
             Self::Scalar(s) => s.declaration_kind(),
             Self::Map(_) => "MapDeclaration",
+        }
+    }
+
+    /// The decorators attached to this declaration, whichever kind it is.
+    pub fn decorators(&self) -> &[mm::Decorator] {
+        match self {
+            Self::Class(c) => c.decorators(),
+            Self::Enum(e) => e.decorators.as_deref().unwrap_or(&[]),
+            Self::Scalar(s) => s.decorators(),
+            Self::Map(m) => m.decorators(),
         }
     }
 

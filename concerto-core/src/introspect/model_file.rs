@@ -8,6 +8,8 @@
 
 use std::collections::HashMap;
 
+use concerto_metamodel::concerto_metamodel_1_0_0 as mm;
+
 use crate::error::{ConcertoError, Result};
 use crate::introspect::declaration::Declaration;
 use crate::introspect::import::Import;
@@ -18,6 +20,7 @@ use crate::model_util::{is_primitive_type, parse_namespace, qualify};
 pub struct ModelFile {
     namespace: String,
     version: String,
+    decorators: Vec<mm::Decorator>,
     imports: Vec<Import>,
     declarations: Vec<Declaration>,
     local_types: HashMap<String, usize>,
@@ -38,6 +41,26 @@ impl ModelFile {
             .to_string();
 
         let version = parse_namespace(&namespace)?.version;
+
+        let decorators = match value.get("decorators") {
+            None => Vec::new(),
+            Some(decorators @ serde_json::Value::Array(_)) => {
+                serde_json::from_value(decorators.clone()).map_err(|e| {
+                    ConcertoError::IllegalModel {
+                        message: format!("invalid model 'decorators': {e}"),
+                        file_name: file_name.clone(),
+                        location: None,
+                    }
+                })?
+            }
+            Some(_) => {
+                return Err(ConcertoError::IllegalModel {
+                    message: "model 'decorators' must be an array".into(),
+                    file_name: file_name.clone(),
+                    location: None,
+                });
+            }
+        };
 
         let imports = match value.get("imports") {
             None => Vec::new(),
@@ -89,6 +112,7 @@ impl ModelFile {
         Ok(Self {
             namespace,
             version,
+            decorators,
             imports,
             declarations,
             local_types,
@@ -104,6 +128,11 @@ impl ModelFile {
     /// The version part of the namespace.
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    /// The decorators attached to the namespace itself.
+    pub fn decorators(&self) -> &[mm::Decorator] {
+        &self.decorators
     }
 
     /// The originating file name, if one was supplied.
@@ -268,5 +297,34 @@ mod tests {
             None,
         );
         assert!(bad_imports.is_err());
+    }
+    #[test]
+    fn malformed_namespace_decorators_are_rejected() {
+        // Not an array at all.
+        assert!(
+            ModelFile::from_json(
+                &serde_json::json!({
+                    "$class": "concerto.metamodel@1.0.0.Model",
+                    "namespace": "org.x@1.0.0",
+                    "decorators": "oops",
+                    "declarations": []
+                }),
+                None,
+            )
+            .is_err()
+        );
+        // An array whose entries are not decorators.
+        assert!(
+            ModelFile::from_json(
+                &serde_json::json!({
+                    "$class": "concerto.metamodel@1.0.0.Model",
+                    "namespace": "org.x@1.0.0",
+                    "decorators": [{ "$class": "concerto.metamodel@1.0.0.Decorator" }],
+                    "declarations": []
+                }),
+                None,
+            )
+            .is_err()
+        );
     }
 }
