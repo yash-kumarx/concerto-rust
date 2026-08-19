@@ -8,6 +8,8 @@
 
 use std::collections::HashMap;
 
+use concerto_metamodel::concerto_metamodel_1_0_0 as mm;
+
 use crate::error::{ConcertoError, Result};
 use crate::introspect::declaration::Declaration;
 use crate::introspect::import::Import;
@@ -18,6 +20,7 @@ use crate::model_util::{is_primitive_type, parse_namespace, qualify};
 pub struct ModelFile {
     namespace: String,
     version: String,
+    decorators: Vec<mm::Decorator>,
     imports: Vec<Import>,
     declarations: Vec<Declaration>,
     local_types: HashMap<String, usize>,
@@ -89,6 +92,10 @@ impl ModelFile {
         Ok(Self {
             namespace,
             version,
+            decorators: value
+                .get("decorators")
+                .and_then(|d| serde_json::from_value(d.clone()).ok())
+                .unwrap_or_default(),
             imports,
             declarations,
             local_types,
@@ -104,6 +111,11 @@ impl ModelFile {
     /// The version part of the namespace.
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    /// The decorators attached to the namespace itself.
+    pub fn decorators(&self) -> &[mm::Decorator] {
+        &self.decorators
     }
 
     /// The originating file name, if one was supplied.

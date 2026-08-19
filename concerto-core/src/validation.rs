@@ -42,6 +42,7 @@ impl ModelManager {
         model_files.sort_by_key(|model_file| model_file.namespace());
 
         for model_file in model_files {
+            check_unique_decorators(model_file.decorators())?;
             check_import_clashes(model_file)?;
             check_import_namespaces(model_file)?;
             check_imported_types_exist(self, model_file)?;
@@ -80,10 +81,21 @@ fn validate_declaration(
     namespace: &str,
     declaration: &Declaration,
 ) -> Result<()> {
+    check_unique_decorators(declaration.decorators())?;
     match declaration {
         Declaration::Class(class) => validate_class(manager, namespace, class),
-        Declaration::Map(map) => check_map_types(manager, namespace, map),
-        Declaration::Enum(_) | Declaration::Scalar(_) => Ok(()),
+        Declaration::Map(map) => {
+            check_unique_decorators(map.key_decorators())?;
+            check_unique_decorators(map.value_decorators())?;
+            check_map_types(manager, namespace, map)
+        }
+        Declaration::Enum(enumeration) => {
+            for value in &enumeration.properties {
+                check_unique_decorators(value.decorators.as_deref().unwrap_or(&[]))?;
+            }
+            Ok(())
+        }
+        Declaration::Scalar(_) => Ok(()),
     }
 }
 
@@ -92,7 +104,6 @@ fn validate_class(manager: &ModelManager, namespace: &str, class: &ClassDeclarat
     check_unique_field_names(manager, class, &qualify(namespace, class.name()))?;
     check_identifier(manager, namespace, class)?;
     check_identity_matches_super(manager, namespace, class)?;
-    check_unique_decorators(class.decorators())?;
     for property in class.own_properties() {
         check_property_type(manager, namespace, class.name(), property)?;
         check_unique_decorators(property.decorators())?;
@@ -100,7 +111,9 @@ fn validate_class(manager: &ModelManager, namespace: &str, class: &ClassDeclarat
     Ok(())
 }
 
-/// An element may not carry the same decorator twice.
+/// An element may not carry the same decorator twice. Every part of a model
+/// that can be decorated is checked: the namespace, each declaration, the
+/// properties and enum values inside it, and a map's key and value.
 fn check_unique_decorators(decorators: &[mm::Decorator]) -> Result<()> {
     let mut seen = HashSet::new();
     for decorator in decorators {
@@ -602,6 +615,93 @@ mod tests {
             }))
         ]));
         assert!(err.is_ok());
+    }
+
+    /// Two decorators of the same name, which no element may carry.
+    fn repeated() -> serde_json::Value {
+        serde_json::json!([
+            { "$class": "concerto.metamodel@1.0.0.Decorator", "name": "tag", "arguments": [] },
+            { "$class": "concerto.metamodel@1.0.0.Decorator", "name": "tag", "arguments": [] }
+        ])
+    }
+
+    /// Validates a whole model, so a namespace decorator can be given too.
+    fn validate_model(model: serde_json::Value) -> crate::error::Result<()> {
+        let mut manager = ModelManager::new().unwrap();
+        manager.add_model(&model, None)?;
+        manager.validate_models()
+    }
+
+    #[test]
+    fn every_element_that_can_be_decorated_rejects_a_repeat() {
+        let repeated = repeated();
+        let elements = [
+            // The namespace itself.
+            serde_json::json!({
+                "$class": "concerto.metamodel@1.0.0.Model", "namespace": "org.d@1.0.0",
+                "decorators": repeated, "declarations": []
+            }),
+            // An enum declaration and one of its values.
+            serde_json::json!({
+                "$class": "concerto.metamodel@1.0.0.Model", "namespace": "org.d@1.0.0",
+                "declarations": [{
+                    "$class": "concerto.metamodel@1.0.0.EnumDeclaration", "name": "E",
+                    "decorators": repeated,
+                    "properties": [{ "$class": "concerto.metamodel@1.0.0.EnumProperty", "name": "A" }]
+                }]
+            }),
+            serde_json::json!({
+                "$class": "concerto.metamodel@1.0.0.Model", "namespace": "org.d@1.0.0",
+                "declarations": [{
+                    "$class": "concerto.metamodel@1.0.0.EnumDeclaration", "name": "E",
+                    "properties": [{
+                        "$class": "concerto.metamodel@1.0.0.EnumProperty", "name": "A",
+                        "decorators": repeated
+                    }]
+                }]
+            }),
+            // A scalar declaration.
+            serde_json::json!({
+                "$class": "concerto.metamodel@1.0.0.Model", "namespace": "org.d@1.0.0",
+                "declarations": [{
+                    "$class": "concerto.metamodel@1.0.0.StringScalar", "name": "S",
+                    "decorators": repeated
+                }]
+            }),
+            // A map, and its key and value.
+            serde_json::json!({
+                "$class": "concerto.metamodel@1.0.0.Model", "namespace": "org.d@1.0.0",
+                "declarations": [{
+                    "$class": "concerto.metamodel@1.0.0.MapDeclaration", "name": "M",
+                    "decorators": repeated,
+                    "key": { "$class": "concerto.metamodel@1.0.0.StringMapKeyType" },
+                    "value": { "$class": "concerto.metamodel@1.0.0.StringMapValueType" }
+                }]
+            }),
+            serde_json::json!({
+                "$class": "concerto.metamodel@1.0.0.Model", "namespace": "org.d@1.0.0",
+                "declarations": [{
+                    "$class": "concerto.metamodel@1.0.0.MapDeclaration", "name": "M",
+                    "key": { "$class": "concerto.metamodel@1.0.0.StringMapKeyType", "decorators": repeated },
+                    "value": { "$class": "concerto.metamodel@1.0.0.StringMapValueType" }
+                }]
+            }),
+            serde_json::json!({
+                "$class": "concerto.metamodel@1.0.0.Model", "namespace": "org.d@1.0.0",
+                "declarations": [{
+                    "$class": "concerto.metamodel@1.0.0.MapDeclaration", "name": "M",
+                    "key": { "$class": "concerto.metamodel@1.0.0.StringMapKeyType" },
+                    "value": { "$class": "concerto.metamodel@1.0.0.StringMapValueType", "decorators": repeated }
+                }]
+            }),
+        ];
+        for element in elements {
+            let err = validate_model(element.clone());
+            assert!(
+                err.is_err_and(|e| e.to_string().contains("Duplicate decorator")),
+                "a repeat should be rejected here: {element}"
+            );
+        }
     }
 
     #[test]
